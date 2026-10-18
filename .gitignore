@@ -1,0 +1,16 @@
+# Binaries
+terraform-provider-permio
+dist/
+*.exe
+
+# Terraform working files from examples and tests
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Editors
+.idea/
+.vscode/
+*.swp

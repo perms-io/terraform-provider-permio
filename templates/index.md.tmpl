@@ -1,0 +1,42 @@
+---
+page_title: "Provider: Permio"
+description: |-
+  The Permio provider manages permissions, roles, groups, group memberships and grants in a Permio project.
+---
+
+# Permio Provider
+
+The Permio provider manages authorisation data in [Permio](https://perms.io): permissions, roles,
+groups and their members, and grants of roles and permissions to principals on resource URIs. The
+`permio_check` data source evaluates permission checks, which is useful for policy tests.
+
+## Authentication
+
+The provider authenticates with a Permio API key (`perms_...`). An API key belongs to one
+organisation and one project:
+
+* a **full-access** key is needed to create, change or delete anything;
+* a **check-only** key can read, and is enough for the data sources.
+
+Supply the key with the `PERMIO_API_KEY` environment variable rather than in configuration. Because
+keys are scoped to one project, the provider's `project` (and any resource's `project`) must be the
+key's project.
+
+## Example Usage
+
+{{ tffile "examples/provider/provider.tf" }}
+
+## Concepts
+
+* **Resource URIs** such as `/workspaces/acme/projects/42` identify what a grant applies to. Grants
+  are inherited by every URI below the granted one, and a `_` segment matches any single segment.
+* **Principals** are your users and services, identified by IDs from your own system. A group's
+  principal is `group:<name>`; granting to it grants to every member.
+* **Grants** are managed with `permio_grant`, which is authoritative for one principal on one
+  resource URI. Use exactly one `permio_grant` per pair.
+* Group membership can be managed authoritatively (`permio_group_members`) or per member
+  (`permio_group_member`), but not both on the same group.
+
+See the [SaaS workspace guide](guides/saas-workspace) for a complete example.
+
+{{ .SchemaMarkdown | trimspace }}
