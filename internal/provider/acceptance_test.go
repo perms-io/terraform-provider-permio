@@ -59,14 +59,15 @@ func TestAccPermio_workspace(t *testing.T) {
 	c := accClient(t)
 	project := accProject()
 	prefix := "tfacc-" + acctest.RandStringFromCharSet(8, "abcdefghijklmnopqrstuvwxyz0123456789")
-	user := prefix + "-alice"
+	// An Auth0-style user ID: "|" is also the grant import ID separator.
+	user := "auth0|" + prefix + "-alice"
 
-	cfg := func(description string, editorPerms string) string {
+	cfgNamed := func(readName, description string, editorPerms string) string {
 		return fmt.Sprintf(`
 provider "permio" {}
 
 resource "permio_permission" "read" {
-  name        = "%[1]s.doc.read"
+  name        = "%[1]s.%[5]s"
   description = %[2]q
 }
 resource "permio_permission" "write" { name = "%[1]s.doc.write" }
@@ -97,7 +98,10 @@ resource "permio_grant" "direct" {
   resource    = "/%[1]s/workspaces/acme/docs/1"
   permissions = [permio_permission.write.name]
 }
-`, prefix, description, editorPerms, user)
+`, prefix, description, editorPerms, user, readName)
+	}
+	cfg := func(description string, editorPerms string) string {
+		return cfgNamed("doc.read", description, editorPerms)
 	}
 	checkCfg := cfg("v2", `[permio_permission.read.name, permio_permission.write.name]`) + fmt.Sprintf(`
 data "permio_role" "editor" { name = permio_role.editor.name }
@@ -117,6 +121,9 @@ data "permio_check" "inherited" {
 			}
 			if _, err := c.API.GetPermission(t.Context(), &pb.GetPermissionRequest{ProjectName: project, Name: prefix + ".doc.read"}); !client.IsNotFound(err) {
 				return fmt.Errorf("permission still exists (err=%v)", err)
+			}
+			if _, err := c.API.GetPermission(t.Context(), &pb.GetPermissionRequest{ProjectName: project, Name: prefix + ".document.read"}); !client.IsNotFound(err) {
+				return fmt.Errorf("renamed permission still exists (err=%v)", err)
 			}
 			if r, err := c.FindRoleByName(t.Context(), project, prefix+" Editor"); err != nil || r != nil {
 				return fmt.Errorf("role still exists (err=%v)", err)
@@ -158,6 +165,20 @@ data "permio_check" "inherited" {
 				ImportStateId: project + "/" + prefix + "-eng"},
 			{ResourceName: "permio_grant.direct", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"timeouts"},
 				ImportStateId: project + "|" + user + "|/" + prefix + "/workspaces/acme/docs/1"},
+			// Rename a permission that a role uses: the role keeps it under the new name.
+			{
+				Config: cfgNamed("document.read", "v2", `[permio_permission.read.name, permio_permission.write.name]`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("permio_permission.read", "name", prefix+".document.read"),
+					resource.TestCheckTypeSetElemAttr("permio_role.editor", "permissions.*", prefix+".document.read"),
+					func(*terraform.State) error {
+						if _, err := c.API.GetPermission(t.Context(), &pb.GetPermissionRequest{ProjectName: project, Name: prefix + ".doc.read"}); !client.IsNotFound(err) {
+							return fmt.Errorf("old permission still exists (err=%v)", err)
+						}
+						return nil
+					},
+				),
+			},
 		},
 	})
 }
