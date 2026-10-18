@@ -5,6 +5,7 @@ subcategory: ""
 description: |-
   A role: a named set of permissions. Grant a role to a principal with permio_grant, using the role's id.
   Role names are unique across the whole organisation, not just the project. A role can be renamed in place.
+  If a permission that the role contains is deleted outside Terraform, Permio keeps referring to it from the role, and the API then rejects every change to the role until the permission exists again. The provider reports this as a warning that names the permission, keeps it in the role's state so that the plan stays clean, and explains how to fix it: recreate the permission.
 ---
 
 # permio_role (Resource)
@@ -12,6 +13,8 @@ description: |-
 A role: a named set of permissions. Grant a role to a principal with `permio_grant`, using the role's `id`.
 
 Role names are unique across the whole organisation, not just the project. A role can be renamed in place.
+
+If a permission that the role contains is deleted outside Terraform, Permio keeps referring to it from the role, and the API then rejects every change to the role until the permission exists again. The provider reports this as a warning that names the permission, keeps it in the role's state so that the plan stays clean, and explains how to fix it: recreate the permission.
 
 ## Example Usage
 
@@ -69,8 +72,8 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-# A role can be imported by "<project>/<role ID>" or "<project>/<role name>", or without the project prefix
-# for the provider's project. Role names that contain "/" must use the "<project>/<name>" form.
+# A role is imported by "<project>/<role ID>" or "<project>/<role name>". The project is required,
+# because role names can contain "/" (everything after the first "/" is the role ID or name).
 terraform import permio_role.editor default/2f6c1d1e-6a4b-4c8f-9d55-0c1f3f6b7a10
 terraform import permio_role.editor "default/Document editor"
 ```

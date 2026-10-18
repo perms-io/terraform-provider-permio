@@ -43,7 +43,7 @@ resource "permio_group_member" "alice" {
 
 ### Read-Only
 
-- `id` (String) `<project>/<group>/<principal>`.
+- `id` (String) `<project>/<group>/<principal>`, which is also the import ID.
 
 <a id="nestedblock--timeouts"></a>
 ### Nested Schema for `timeouts`
@@ -61,7 +61,9 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-# Imported by "<project>/<group>/<principal>" (the principal may contain "/"),
-# or "<group>/<principal>" for the provider's project.
+# Imported by "<project>/<group>/<principal>". The project is required.
+# Project and group names cannot contain "/", so the ID is split at the first two "/" and the principal
+# is the rest, which may itself contain "/".
 terraform import permio_group_member.alice default/oncall/user_alice
+terraform import permio_group_member.bob default/oncall/user/bob@example.com
 ```

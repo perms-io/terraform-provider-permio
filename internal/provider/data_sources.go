@@ -212,7 +212,7 @@ func (d *groupDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	m.ID = types.StringValue(g.GetId())
 	m.Project = types.StringValue(project)
 	m.Description = types.StringValue(g.GetDescription())
-	m.Principal = types.StringValue(groupPrincipalPrefix + g.GetName())
+	m.Principal = types.StringValue(groupPrincipal(g))
 	m.Members = stringsToSet(members)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }

@@ -105,11 +105,17 @@ func setGroupFromAPI(m *groupModel, project string, g *pb.Group) {
 	m.Project = types.StringValue(project)
 	m.Name = types.StringValue(g.GetName())
 	m.Description = types.StringValue(g.GetDescription())
-	principal := g.GetPrincipalId()
-	if principal == "" {
-		principal = groupPrincipalPrefix + g.GetName()
+	m.Principal = types.StringValue(groupPrincipal(g))
+}
+
+// groupPrincipal returns the principal ID that grants to the group are made to, as reported by the API. The API
+// always reports "group:<name>", which is also what the resource plans before the group exists; the fallback only
+// covers an API that leaves the field out.
+func groupPrincipal(g *pb.Group) string {
+	if p := g.GetPrincipalId(); p != "" {
+		return p
 	}
-	m.Principal = types.StringValue(principal)
+	return groupPrincipalPrefix + g.GetName()
 }
 
 func (r *groupResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -198,9 +204,15 @@ func (r *groupResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 }
 
 func (r *groupResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	project, name, ok := splitProjectID(req.ID, r.pd)
-	if !ok || !groupNamePattern.MatchString(name) {
-		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Expected \"<project>/<group name>\" or \"<group name>\", got %q.", req.ID))
+	project, name, err := splitProjectID(req.ID, r.pd)
+	if err == nil {
+		err = validateGroupName(name)
+		if err != nil {
+			err = fmt.Errorf("the group %q %v", name, err)
+		}
+	}
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", importIDError(req.ID, `"<project>/<group>" or "<group>"`, `default/engineering`, err))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project"), project)...)

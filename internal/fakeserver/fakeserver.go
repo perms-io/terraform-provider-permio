@@ -75,6 +75,7 @@ type Server struct {
 	groups      map[string]*group // by project + "/" + name
 	nextID      int
 	calls       map[string]int
+	failNext    map[string]codes.Code
 }
 
 // New returns a fake server with FullAccessKey and CheckOnlyKey for the "default" project.
@@ -89,7 +90,16 @@ func New() *Server {
 		grants:      map[grantKey]*grant{},
 		groups:      map[string]*group{},
 		calls:       map[string]int{},
+		failNext:    map[string]codes.Code{},
 	}
+}
+
+// FailNext makes the next call of an RPC (by method name, e.g. "DeletePermission") fail with code, without
+// running it, to simulate a transient failure part way through a sequence of calls.
+func (s *Server) FailNext(method string, code codes.Code) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failNext[method] = code
 }
 
 // AddKey registers an API key.
@@ -140,7 +150,12 @@ func (s *Server) countCalls(ctx context.Context, req any, info *grpc.UnaryServer
 	name := info.FullMethod[strings.LastIndex(info.FullMethod, "/")+1:]
 	s.mu.Lock()
 	s.calls[name]++
+	code, fail := s.failNext[name]
+	delete(s.failNext, name)
 	s.mu.Unlock()
+	if fail {
+		return nil, status.Errorf(code, "injected failure of %s", name)
+	}
 	return handler(ctx, req)
 }
 

@@ -2,9 +2,6 @@ package provider
 
 import (
 	"context"
-	"fmt"
-	"slices"
-	"strings"
 
 	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -64,7 +61,7 @@ func (r *grantResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 			"pairs and are not touched by this resource.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "`<project>|<principal>|<resource>`.",
+				MarkdownDescription: "`<project>|<principal>|<resource>`, which is also the import ID.",
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
@@ -145,31 +142,30 @@ func (r *grantResource) directGrant(ctx context.Context, project, principal, uri
 
 // existing narrows permission names and role IDs to the ones that still exist in the project. A grant can refer
 // to a permission or role that was deleted (or a permission that was renamed): the API keeps such names on the
-// grant but rejects them in a revoke, so they cannot be managed.
+// grant but rejects them in a revoke, so they cannot be managed. Only the given names are looked up, one at a time,
+// rather than listing the project's whole catalogue: grants rarely name more than a handful.
 func (r *grantResource) existing(ctx context.Context, project string, perms, roles []string) ([]string, []string, error) {
-	if len(perms) > 0 {
-		all, err := r.pd.client.ListAllPermissions(ctx, project)
+	c := r.pd.client
+	var livePerms, liveRoles []string
+	for _, name := range perms {
+		_, err := c.API.GetPermission(ctx, &pb.GetPermissionRequest{ProjectName: project, Name: name})
+		switch {
+		case err == nil:
+			livePerms = append(livePerms, name)
+		case !client.IsNotFound(err):
+			return nil, nil, err
+		}
+	}
+	for _, id := range roles {
+		role, err := getRole(ctx, c, project, id)
 		if err != nil {
 			return nil, nil, err
 		}
-		names := make([]string, 0, len(all))
-		for _, p := range all {
-			names = append(names, p.GetName())
+		if role != nil {
+			liveRoles = append(liveRoles, id)
 		}
-		perms = slices.DeleteFunc(slices.Clone(perms), func(n string) bool { return !slices.Contains(names, n) })
 	}
-	if len(roles) > 0 {
-		all, err := r.pd.client.ListAllRoles(ctx, project, "")
-		if err != nil {
-			return nil, nil, err
-		}
-		ids := make([]string, 0, len(all))
-		for _, ro := range all {
-			ids = append(ids, ro.GetId())
-		}
-		roles = slices.DeleteFunc(slices.Clone(roles), func(id string) bool { return !slices.Contains(ids, id) })
-	}
-	return perms, roles, nil
+	return livePerms, liveRoles, nil
 }
 
 // revoke revokes the given permissions and roles, skipping any that no longer exist.
@@ -274,8 +270,8 @@ func (r *grantResource) Read(ctx context.Context, req resource.ReadRequest, resp
 			client.AddError(&resp.Diagnostics, "Unable to read grant", err)
 			return
 		}
-		perms = slices.DeleteFunc(perms, func(n string) bool { return slices.Contains(newPerms, n) && !slices.Contains(livePerms, n) })
-		roles = slices.DeleteFunc(roles, func(n string) bool { return slices.Contains(newRoles, n) && !slices.Contains(liveRoles, n) })
+		perms = difference(perms, difference(newPerms, livePerms))
+		roles = difference(roles, difference(newRoles, liveRoles))
 	}
 
 	if len(perms) == 0 && len(roles) == 0 {
@@ -340,32 +336,11 @@ func (r *grantResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	}
 }
 
-// parseGrantID parses "<project>|<principal>|<resource>", or "<principal>|<resource>" for the provider's project.
-// The resource URI cannot contain "|", and neither can a project name, so the principal is everything in between.
-func parseGrantID(id string, pd *providerData) (project, principal, uri string, ok bool) {
-	last := strings.LastIndex(id, "|")
-	if last < 0 {
-		return "", "", "", false
-	}
-	uri, rest := id[last+1:], id[:last]
-	if first := strings.Index(rest, "|"); first >= 0 {
-		project, principal = rest[:first], rest[first+1:]
-	} else if pd != nil {
-		project, principal = pd.project, rest
-	} else {
-		return "", "", "", false
-	}
-	if !projectPattern.MatchString(project) || len(project) > 32 || validatePrincipal(principal) != nil || validateResourceURI(uri) != nil {
-		return "", "", "", false
-	}
-	return project, principal, uri, true
-}
-
 func (r *grantResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	project, principal, uri, ok := parseGrantID(req.ID, r.pd)
-	if !ok {
-		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf(
-			"Expected \"<project>|<principal>|<resource URI>\" (or \"<principal>|<resource URI>\" for the provider's project), got %q.", req.ID))
+	project, principal, uri, err := parseGrantID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", importIDError(req.ID, `"<project>|<principal>|<resource URI>"`,
+			`default|auth0|abc123|/workspaces/acme`, err))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project"), project)...)

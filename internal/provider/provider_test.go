@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -176,6 +177,14 @@ func (e *testEnv) roleID(name string) func() []string {
 		}
 		return []string{r.GetId()}
 	}
+}
+
+// diagErr turns error diagnostics into an error.
+func diagErr(d diag.Diagnostics) error {
+	if d.HasError() {
+		return fmt.Errorf("%v", d)
+	}
+	return nil
 }
 
 func (e *testEnv) must(err error) {

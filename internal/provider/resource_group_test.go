@@ -202,6 +202,17 @@ resource "permio_group_member" "bob" {
 			ResourceName: "permio_group_member.bob", ImportState: true, ImportStateVerify: true,
 			ImportStateId: "default/engineering/user/bob@example.com", ImportStateVerifyIgnore: []string{"timeouts"},
 		},
+		// The project is required, because the principal can contain "/".
+		resource.TestStep{
+			ResourceName: "permio_group_member.bob", ImportState: true,
+			ImportStateId: "engineering/bob",
+			ExpectError:   regexp.MustCompile(`three\s+parts\s+separated\s+by\s+"/"`),
+		},
+		resource.TestStep{
+			ResourceName: "permio_group_member.bob", ImportState: true,
+			ImportStateId: "a-project-name-that-is-too-long-x/engineering/bob",
+			ExpectError:   regexp.MustCompile(`not\s+a\s+valid\s+project\s+name:\s+it\s+must\s+be\s+1\s+to\s+32`),
+		},
 		// Drift: removed out of band, so it is added again.
 		resource.TestStep{
 			PreConfig: func() { e.must(e.client.RemoveGroupMembers(ctx(), "default", "engineering", []string{"alice"})) },

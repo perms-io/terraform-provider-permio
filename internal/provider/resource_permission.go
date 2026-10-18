@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -51,10 +52,18 @@ func (r *permissionResource) Schema(ctx context.Context, _ resource.SchemaReques
 			"Permission names are unique across the whole organisation, not just the project.\n\n" +
 			"Renaming a permission is done in place. Roles in the project that contain the permission keep it under " +
 			"its new name: if any role contains it, the provider creates the permission under the new name, moves " +
-			"those roles over and deletes the old one (so `id` changes). Grants are not rewritten, so grant the new name " +
-			"(for example by referencing `permio_permission.<name>.name` from `permio_grant`).\n\n" +
-			"Deleting a permission first removes it from the roles in the project that contain it, because the API " +
-			"cannot read a role that refers to a deleted permission. It fails if the permission is a role's only one.",
+			"those roles over and deletes the old one (so `id` changes). If that is interrupted, the next apply finishes " +
+			"it. A rename fails, rather than taking the permission over, if a permission with the new name already " +
+			"exists. Grants are not rewritten, so grant the new name (for example by referencing " +
+			"`permio_permission.<name>.name` from `permio_grant`).\n\n" +
+			"The API does not remove a deleted permission from roles, and a role that refers to a deleted permission " +
+			"can no longer be changed or deleted, so the provider never leaves a role referring to one:\n\n" +
+			"* **Destroying** a permission first removes it from the roles in the project that contain it, with a " +
+			"warning that names them (managed roles that still list it then show a change on the next plan). It " +
+			"fails if the permission is a role's only one.\n" +
+			"* **Replacing** a permission (for example because `project` changed, or with `-replace`) fails while any " +
+			"role contains it, and the error names the roles, because the roles would otherwise lose the permission " +
+			"until a later apply. Remove it from the roles first.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "Permission ID assigned by Permio.",
@@ -86,7 +95,14 @@ func (r *permissionResource) Configure(_ context.Context, req resource.Configure
 
 func (r *permissionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	planProject(ctx, r.pd, req, resp)
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	// Delete runs both for a destroy and for the first half of a replacement, and has to tell them apart: see
+	// deleteChecked. Only a planned destroy is marked.
+	if req.Plan.Raw.IsNull() {
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, plannedDestroyKey, []byte("true"))...)
+		return
+	}
+	resp.Diagnostics.Append(resp.Private.SetKey(ctx, plannedDestroyKey, nil)...)
+	if req.State.Raw.IsNull() {
 		return
 	}
 	var prior, planned types.String
@@ -149,8 +165,12 @@ func (r *permissionResource) Read(ctx context.Context, req resource.ReadRequest,
 	project := projectOf(state.Project, r.pd)
 	p, err := r.pd.client.API.GetPermission(ctx, &pb.GetPermissionRequest{ProjectName: project, Name: state.Name.ValueString()})
 	if client.IsNotFound(err) {
-		resp.State.RemoveResource(ctx)
-		return
+		// An interrupted rename may have got as far as deleting the old permission.
+		p, err = r.renamedTo(ctx, project, req.Private, resp.Private, &resp.Diagnostics)
+		if p == nil && err == nil {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 	}
 	if err != nil {
 		client.AddError(&resp.Diagnostics, "Unable to read permission", err)
@@ -161,6 +181,24 @@ func (r *permissionResource) Read(ctx context.Context, req resource.ReadRequest,
 	state.Name = types.StringValue(p.GetName())
 	state.Description = types.StringValue(p.GetDescription())
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// renamedTo returns the permission that an interrupted rename created, if private state records one and it still
+// exists, and clears the record. It returns nil if there is none.
+func (r *permissionResource) renamedTo(ctx context.Context, project string, from, to privateState, diags *diag.Diagnostics) (*pb.Permission, error) {
+	pending := getPendingRename(ctx, from, diags)
+	if pending == nil {
+		return nil, nil
+	}
+	p, err := r.pd.client.API.GetPermission(ctx, &pb.GetPermissionRequest{ProjectName: project, Name: pending.Name})
+	if client.IsNotFound(err) || (err == nil && p.GetId() != pending.ID) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	setPendingRename(ctx, to, nil, diags)
+	return p, nil
 }
 
 func (r *permissionResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -176,19 +214,22 @@ func (r *permissionResource) Update(ctx context.Context, req resource.UpdateRequ
 
 	project := projectOf(plan.Project, r.pd)
 	oldName, newName, desc := state.Name.ValueString(), plan.Name.ValueString(), plan.Description.ValueString()
-	api := r.pd.client.API
+	pending := getPendingRename(ctx, req.Private, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	var result *pb.Permission
-	var err error
-	if oldName == newName {
-		result, err = api.UpdatePermission(ctx, &pb.UpdatePermissionRequest{ProjectName: project, Name: oldName, Description: desc})
+	if oldName == newName && pending == nil {
+		var err error
+		result, err = r.pd.client.API.UpdatePermission(ctx, &pb.UpdatePermissionRequest{ProjectName: project, Name: oldName, Description: desc})
 		if err != nil {
 			client.AddError(&resp.Diagnostics, "Unable to update permission", err)
 			return
 		}
 	} else {
-		result, err = r.rename(ctx, project, oldName, newName, desc, &resp.Diagnostics)
-		if err != nil {
+		result = r.rename(ctx, project, oldName, newName, desc, pending, resp.Private, &resp.Diagnostics)
+		if result == nil {
 			return
 		}
 	}
@@ -198,41 +239,128 @@ func (r *permissionResource) Update(ctx context.Context, req resource.UpdateRequ
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
+// pendingRenameKey is the private state key that records a rename that created the new permission but has not yet
+// finished moving roles to it and deleting the old one. It lets a later apply tell a permission that this resource
+// created from one that something else manages.
+const pendingRenameKey = "pending_rename"
+
+type pendingRename struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+}
+
+type privateState interface {
+	GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics)
+	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
+}
+
+func getPendingRename(ctx context.Context, p privateState, diags *diag.Diagnostics) *pendingRename {
+	if p == nil {
+		return nil
+	}
+	raw, d := p.GetKey(ctx, pendingRenameKey)
+	diags.Append(d...)
+	if len(raw) == 0 {
+		return nil
+	}
+	var pr pendingRename
+	if err := json.Unmarshal(raw, &pr); err != nil || pr.Name == "" || pr.ID == "" {
+		return nil // unreadable; treat as absent, which fails safe (an existing permission is then never adopted)
+	}
+	return &pr
+}
+
+func setPendingRename(ctx context.Context, p privateState, pr *pendingRename, diags *diag.Diagnostics) {
+	var raw []byte
+	if pr != nil {
+		raw, _ = json.Marshal(pr)
+	}
+	diags.Append(p.SetKey(ctx, pendingRenameKey, raw)...)
+}
+
 // rename renames a permission. The API's rename does not update roles that contain the permission, and a role that
 // refers to a permission that no longer exists can no longer be read or updated. So when roles contain the
 // permission, the new permission is created alongside the old one, the roles are switched over, and the old one is
 // deleted.
-func (r *permissionResource) rename(ctx context.Context, project, oldName, newName, desc string, diags *diag.Diagnostics) (*pb.Permission, error) {
+//
+// The three steps are not atomic. The new permission's ID is recorded in private state as soon as it is created, so
+// if a later step fails, the next apply recognises the permission it created and finishes the remaining steps. A
+// permission with the new name that this resource did not create is never taken over.
+func (r *permissionResource) rename(ctx context.Context, project, oldName, newName, desc string, pending *pendingRename, private privateState, diags *diag.Diagnostics) *pb.Permission {
 	api := r.pd.client.API
-	roles, err := r.pd.client.ListAllRoles(ctx, project, "")
-	if err != nil {
-		diags.AddError("Unable to list roles", client.Describe(err))
-		return nil, err
-	}
-	var referencing []*pb.Role
-	for _, role := range roles {
-		if slices.Contains(client.PermissionNames(role), oldName) {
-			referencing = append(referencing, role)
-		}
+
+	if pending != nil && pending.Name != newName {
+		diags.AddError("An earlier rename did not finish", fmt.Sprintf(
+			"An earlier apply started renaming the permission %q to %q but did not finish: %q may exist, and roles may "+
+				"already use it instead of %q.\n\nSet name to %q and apply to finish that rename first. You can then "+
+				"rename the permission again.", oldName, pending.Name, pending.Name, oldName, pending.Name))
+		return nil
 	}
 
+	// CreatePermission returns an identical existing permission instead of failing, so check first.
+	target, err := api.GetPermission(ctx, &pb.GetPermissionRequest{ProjectName: project, Name: newName})
+	switch {
+	case err == nil && pending != nil && pending.ID == target.GetId():
+		// Created by an earlier, interrupted attempt: finish it.
+		return r.finishRename(ctx, project, oldName, target, desc, private, diags)
+	case err == nil:
+		diags.AddError("Permission already exists", fmt.Sprintf(
+			"The permission %q cannot be renamed to %q, because a permission called %q already exists in project %q "+
+				"(ID %s) and was not created by this resource.\n\n"+
+				"If something else manages it, choose another name. If you want this resource to manage it instead, "+
+				"move any roles over to it, delete %q, then run: terraform state rm <address> and terraform import "+
+				"<address> %s/%s",
+			oldName, newName, newName, project, target.GetId(), oldName, project, newName))
+		return nil
+	case !client.IsNotFound(err):
+		client.AddError(diags, "Unable to check for an existing permission", err)
+		return nil
+	}
+	if pending != nil {
+		// The permission the earlier attempt created is gone, so start again.
+		setPendingRename(ctx, private, nil, diags)
+	}
+
+	referencing, err := r.rolesUsing(ctx, project, oldName)
+	if err != nil {
+		client.AddError(diags, "Unable to list roles", err)
+		return nil
+	}
 	if len(referencing) == 0 {
 		p, err := api.UpdatePermission(ctx, &pb.UpdatePermissionRequest{ProjectName: project, Name: oldName, NewName: proto.String(newName), Description: desc})
 		if err != nil {
 			client.AddError(diags, "Unable to rename permission", err, internalHint(err,
-				"Permission names are unique across the organisation: check that no other permission is called "+newName+"."))
-			return nil, err
+				"Permission names are unique across the organisation: check that no other project has a permission called "+newName+"."))
+			return nil
 		}
-		return p, nil
+		return p
 	}
 
-	p, err := api.CreatePermission(ctx, &pb.CreatePermissionRequest{ProjectName: project, Name: newName, Description: desc})
+	created, err := api.CreatePermission(ctx, &pb.CreatePermissionRequest{ProjectName: project, Name: newName, Description: desc})
 	if err != nil {
 		client.AddError(diags, "Unable to create the renamed permission", err, internalHint(err,
-			"Permission names are unique across the organisation: check that no other permission is called "+newName+"."))
-		return nil, err
+			"Permission names are unique across the organisation: check that no other project has a permission called "+newName+"."))
+		return nil
 	}
-	for _, role := range referencing {
+	setPendingRename(ctx, private, &pendingRename{Name: newName, ID: created.GetId()}, diags)
+	if diags.HasError() {
+		return nil
+	}
+	return r.finishRename(ctx, project, oldName, created, desc, private, diags)
+}
+
+// finishRename moves the roles that still use oldName to target and deletes oldName. Every step is safe to repeat.
+func (r *permissionResource) finishRename(ctx context.Context, project, oldName string, target *pb.Permission, desc string, private privateState, diags *diag.Diagnostics) *pb.Permission {
+	api := r.pd.client.API
+	newName := target.GetName()
+	retry := fmt.Sprintf("\n\nBoth %q and %q exist. Run apply again to finish the rename: it carries on from where it stopped.", oldName, newName)
+
+	roles, err := r.rolesUsing(ctx, project, oldName)
+	if err != nil {
+		diags.AddError("Unable to list roles", client.Describe(err)+retry)
+		return nil
+	}
+	for _, role := range roles {
 		perms := client.PermissionNames(role)
 		for i, n := range perms {
 			if n == oldName {
@@ -242,15 +370,38 @@ func (r *permissionResource) rename(ctx context.Context, project, oldName, newNa
 		perms = slices.Compact(sortedCopy(perms))
 		if _, err := api.UpdateRole(ctx, &pb.UpdateRoleRequest{ProjectName: project, Id: role.GetId(), Name: role.GetName(), Description: role.GetDescription(), Permissions: perms}); err != nil {
 			diags.AddError("Unable to move role to the renamed permission",
-				fmt.Sprintf("Updating role %q (%s) failed: %s\n\nBoth permissions %q and %q now exist; re-run apply to finish the rename.", role.GetName(), role.GetId(), client.Describe(err), oldName, newName))
-			return nil, err
+				fmt.Sprintf("Updating role %q (%s) failed: %s%s", role.GetName(), role.GetId(), client.Describe(err), retry))
+			return nil
 		}
 	}
 	if err := deletePermission(ctx, r.pd.client, project, oldName); err != nil {
-		diags.AddError("Unable to delete the old permission", client.Describe(err))
+		diags.AddError("Unable to delete the old permission", client.Describe(err)+retry)
+		return nil
+	}
+	if target.GetDescription() != desc {
+		target, err = api.UpdatePermission(ctx, &pb.UpdatePermissionRequest{ProjectName: project, Name: newName, Description: desc})
+		if err != nil {
+			client.AddError(diags, "Unable to update the renamed permission's description", err)
+			return nil
+		}
+	}
+	setPendingRename(ctx, private, nil, diags)
+	return target
+}
+
+// rolesUsing returns the roles in the project that contain the permission.
+func (r *permissionResource) rolesUsing(ctx context.Context, project, name string) ([]*pb.Role, error) {
+	roles, err := r.pd.client.ListAllRoles(ctx, project, "")
+	if err != nil {
 		return nil, err
 	}
-	return p, nil
+	var using []*pb.Role
+	for _, role := range roles {
+		if slices.Contains(client.PermissionNames(role), name) {
+			using = append(using, role)
+		}
+	}
+	return using, nil
 }
 
 func (r *permissionResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -263,34 +414,110 @@ func (r *permissionResource) Delete(ctx context.Context, req resource.DeleteRequ
 	ctx, cancel := withTimeout(ctx, t, d, &resp.Diagnostics)
 	defer cancel()
 
-	project, name := projectOf(state.Project, r.pd), state.Name.ValueString()
-	c := r.pd.client
-
-	roles, err := c.ListAllRoles(ctx, project, "")
-	if err != nil {
-		client.AddError(&resp.Diagnostics, "Unable to list roles", err)
+	project := projectOf(state.Project, r.pd)
+	marker, d := req.Private.GetKey(ctx, plannedDestroyKey)
+	resp.Diagnostics.Append(d...)
+	destroying := string(marker) == "true"
+	if !r.deleteChecked(ctx, project, state.Name.ValueString(), destroying, &resp.Diagnostics) {
 		return
 	}
-	for _, role := range roles {
-		perms := client.PermissionNames(role)
-		if !slices.Contains(perms, name) {
-			continue
-		}
-		remaining := slices.DeleteFunc(perms, func(n string) bool { return n == name })
-		if len(remaining) == 0 {
-			resp.Diagnostics.AddError("Permission is still a role's only permission",
-				fmt.Sprintf("The permission %q is the only permission of role %q (%s), and a role must have at least one permission. Change or delete the role first.", name, role.GetName(), role.GetId()))
-			return
-		}
-		if _, err := c.API.UpdateRole(ctx, &pb.UpdateRoleRequest{ProjectName: project, Id: role.GetId(), Name: role.GetName(), Description: role.GetDescription(), Permissions: sortedCopy(remaining)}); err != nil {
-			client.AddError(&resp.Diagnostics, fmt.Sprintf("Unable to remove the permission from role %q", role.GetName()), err)
-			return
+	// Also delete a permission that an interrupted rename created, if it is still there.
+	if pending := getPendingRename(ctx, req.Private, &resp.Diagnostics); pending != nil {
+		p, err := r.pd.client.API.GetPermission(ctx, &pb.GetPermissionRequest{ProjectName: project, Name: pending.Name})
+		switch {
+		case err == nil && p.GetId() == pending.ID:
+			r.deleteChecked(ctx, project, pending.Name, destroying, &resp.Diagnostics)
+		case err != nil && !client.IsNotFound(err):
+			client.AddError(&resp.Diagnostics, "Unable to read the permission created by an interrupted rename", err)
 		}
 	}
+}
 
-	if err := deletePermission(ctx, c, project, name); err != nil {
-		client.AddError(&resp.Diagnostics, "Unable to delete permission", err)
+// plannedDestroyKey marks, in the planned private state, a plan that destroys the permission (rather than
+// replacing it).
+const plannedDestroyKey = "planned_destroy"
+
+// deleteChecked deletes a permission that roles in the project may still contain. The API does not remove a deleted
+// permission from roles, and a role that refers to a deleted permission can no longer be read, changed or deleted,
+// so the permission is never deleted while a role contains it.
+//
+//   - When the permission is being destroyed, it is first removed from those roles, with a warning that names them.
+//     Terraform orders a destroy before the update of roles that stop using the permission in the same apply, so
+//     refusing here would make that common change impossible to apply. Managed roles that still list the
+//     permission show up as a change on the next plan. A role whose only permission it is cannot lose it, which is
+//     an error.
+//   - When it is being replaced (for example because its project changed, or with -replace), the roles would lose
+//     it with nothing to add it back until a later apply, so the replacement fails instead, naming the roles. So does
+//     a delete that was not planned as a destroy, which is the safe default.
+func (r *permissionResource) deleteChecked(ctx context.Context, project, name string, destroying bool, diags *diag.Diagnostics) bool {
+	roles, err := r.rolesUsing(ctx, project, name)
+	if err != nil {
+		client.AddError(diags, "Unable to list roles", err)
+		return false
 	}
+	if len(roles) > 0 {
+		if !destroying {
+			diags.AddError("Permission is still used by roles", permissionInUseDetail(project, name, roles))
+			return false
+		}
+		var only []*pb.Role
+		for _, role := range roles {
+			if len(client.PermissionNames(role)) == 1 {
+				only = append(only, role)
+			}
+		}
+		if len(only) > 0 {
+			diags.AddError("Permission is a role's only permission", fmt.Sprintf(
+				"The permission %q cannot be deleted, because it is the only permission of %s, and a role needs at "+
+					"least one. Give the role another permission or delete it first (if Terraform manages the role, "+
+					"apply that change first, for example with -target).", name, roleList(only)))
+			return false
+		}
+		for _, role := range roles {
+			remaining := slices.DeleteFunc(client.PermissionNames(role), func(n string) bool { return n == name })
+			if _, err := r.pd.client.API.UpdateRole(ctx, &pb.UpdateRoleRequest{ProjectName: project, Id: role.GetId(), Name: role.GetName(), Description: role.GetDescription(), Permissions: sortedCopy(remaining)}); err != nil {
+				client.AddError(diags, fmt.Sprintf("Unable to remove the permission from role %q", role.GetName()), err)
+				return false
+			}
+		}
+		diags.AddWarning("Permission removed from roles", fmt.Sprintf(
+			"Before deleting the permission %q, the provider removed it from %s, because the Permio API does not do "+
+				"that itself and a role that refers to a deleted permission can no longer be changed or deleted. If "+
+				"Terraform manages any of these roles and their configuration still lists the permission, the next "+
+				"plan shows them as changed.", name, roleList(roles)))
+	}
+	if err := deletePermission(ctx, r.pd.client, project, name); err != nil {
+		client.AddError(diags, "Unable to delete permission", err)
+		return false
+	}
+	return true
+}
+
+func roleList(roles []*pb.Role) string {
+	names := make([]string, len(roles))
+	for i, role := range roles {
+		names[i] = fmt.Sprintf("role %q (ID %s)", role.GetName(), role.GetId())
+	}
+	return strings.Join(names, ", ")
+}
+
+func permissionInUseDetail(project, name string, roles []*pb.Role) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The permission %q is being replaced, but these roles in project %q contain it:\n", name, project)
+	for _, role := range roles {
+		fmt.Fprintf(&b, "  - %q (ID %s)", role.GetName(), role.GetId())
+		if len(client.PermissionNames(role)) == 1 {
+			b.WriteString(" (its only permission)")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\nThe Permio API does not remove a deleted permission from roles, so replacing it would mean taking " +
+		"it away from these roles until a later apply adds the new one back, and a role whose only permission it " +
+		"is cannot lose it at all. The permission was not changed.\n\n" +
+		"Remove the permission from these roles first (or move the roles too, if the permission's project is " +
+		"changing, because a role can only contain permissions from its own project), then apply again. To change " +
+		"only the permission's name, rename it in place instead: that keeps the roles.")
+	return b.String()
 }
 
 // deletePermission deletes a permission, treating a permission that does not exist as deleted. (The API reports
@@ -306,27 +533,16 @@ func deletePermission(ctx context.Context, c *client.Client, project, name strin
 }
 
 func (r *permissionResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	project, name, ok := splitProjectID(req.ID, r.pd)
-	if !ok || !permissionPattern.MatchString(name) {
-		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Expected \"<project>/<name>\" or \"<name>\", got %q.", req.ID))
+	project, name, err := splitProjectID(req.ID, r.pd)
+	if err == nil && !permissionPattern.MatchString(name) {
+		err = fmt.Errorf("the permission name %q must contain only letters, digits, '.', '_' and '-'", name)
+	}
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", importIDError(req.ID, `"<project>/<name>" or "<name>"`, `default/document.read`, err))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project"), project)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
-}
-
-// splitProjectID splits an import ID of the form "<project>/<rest>" or "<rest>" (using the provider's project).
-func splitProjectID(id string, pd *providerData) (project, rest string, ok bool) {
-	if p, r, found := strings.Cut(id, "/"); found {
-		if !projectPattern.MatchString(p) || len(p) > 32 || r == "" {
-			return "", "", false
-		}
-		return p, r, true
-	}
-	if id == "" || pd == nil {
-		return "", "", false
-	}
-	return pd.project, id, true
 }
 
 func sortedCopy(s []string) []string {

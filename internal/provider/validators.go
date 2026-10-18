@@ -22,17 +22,33 @@ var (
 )
 
 const (
+	maxProjectLength       = 32
+	maxGroupNameLength     = 64
 	maxResourceURILength   = 2048
 	maxGroupDescription    = 1024
 	groupPrincipalPrefix   = "group:"
 	resourceURIForbiddenIn = `()[]{}*+?|^$\`
 )
 
+// validateProjectName checks a project name: 1 to 32 lower-case letters, digits and hyphens. Project names
+// therefore never contain "/" or "|", which the import ID formats rely on.
+func validateProjectName(p string) error {
+	if p == "" || len(p) > maxProjectLength || !projectPattern.MatchString(p) {
+		return fmt.Errorf("is not a valid project name: it must be 1 to %d lower-case letters, digits and hyphens", maxProjectLength)
+	}
+	return nil
+}
+
+// validateGroupName checks a group name (slug): 1 to 64 lower-case letters, digits and hyphens.
+func validateGroupName(name string) error {
+	if name == "" || len(name) > maxGroupNameLength || !groupNamePattern.MatchString(name) {
+		return fmt.Errorf("is not a valid group name: it must be 1 to %d lower-case letters, digits and hyphens", maxGroupNameLength)
+	}
+	return nil
+}
+
 func projectValidator() validator.String {
-	return stringvalidator.All(
-		stringvalidator.LengthBetween(1, 32),
-		stringvalidator.RegexMatches(projectPattern, "must contain only lower-case letters, digits and hyphens"),
-	)
+	return funcValidator{desc: "must be 1 to 32 lower-case letters, digits and hyphens", fn: validateProjectName}
 }
 
 func permissionNameValidators() []validator.String {
@@ -58,7 +74,7 @@ func roleNameValidators() []validator.String {
 
 func groupNameValidators() []validator.String {
 	return []validator.String{
-		stringvalidator.LengthBetween(1, 64),
+		stringvalidator.LengthBetween(1, maxGroupNameLength),
 		stringvalidator.RegexMatches(groupNamePattern, "must be a slug: lower-case letters, digits and hyphens"),
 	}
 }
@@ -102,8 +118,8 @@ func validatePrincipal(p string) error {
 		return fmt.Errorf("must not be empty")
 	}
 	if name, ok := strings.CutPrefix(p, groupPrincipalPrefix); ok {
-		if name == "" || len(name) > 64 || !groupNamePattern.MatchString(name) {
-			return fmt.Errorf("principal IDs starting with %q are reserved for groups, and %q is not a valid group name (lower-case letters, digits and hyphens, at most 64)", groupPrincipalPrefix, name)
+		if err := validateGroupName(name); err != nil {
+			return fmt.Errorf("starts with %q, which is reserved for groups, but %q %v", groupPrincipalPrefix, name, err)
 		}
 	}
 	return nil

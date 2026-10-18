@@ -3,6 +3,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -123,9 +124,8 @@ func (p *PermioProvider) Configure(ctx context.Context, req provider.ConfigureRe
 			"Set the provider's api_key argument or the "+EnvAPIKey+" environment variable to a Permio API key.")
 		return
 	}
-	if !projectPattern.MatchString(project) || len(project) > 32 {
-		resp.Diagnostics.AddAttributeError(path.Root("project"), "Invalid project",
-			"The project "+project+" is not a valid project name: 1 to 32 lower-case letters, digits and hyphens.")
+	if err := validateProjectName(project); err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("project"), "Invalid project", fmt.Sprintf("The project %q %v.", project, err))
 		return
 	}
 

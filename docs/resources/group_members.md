@@ -64,6 +64,7 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-# Imported by "<project>/<group>" or by "<group>".
+# Imported by "<project>/<group>" or by "<group>" (the provider's project).
+# Group names cannot contain "/", so the two forms cannot be confused.
 terraform import permio_group_members.engineering default/engineering
 ```

@@ -127,11 +127,18 @@ func stringsToSet(items []string) types.Set {
 	return types.SetValueMust(types.StringType, elems)
 }
 
-// difference returns the items of a that are not in b.
+// difference returns the items of a that are not in b, in the order they appear in a.
 func difference(a, b []string) []string {
+	if len(a) == 0 {
+		return nil
+	}
+	exclude := make(map[string]struct{}, len(b))
+	for _, x := range b {
+		exclude[x] = struct{}{}
+	}
 	var out []string
 	for _, x := range a {
-		if !slices.Contains(b, x) {
+		if _, ok := exclude[x]; !ok {
 			out = append(out, x)
 		}
 	}

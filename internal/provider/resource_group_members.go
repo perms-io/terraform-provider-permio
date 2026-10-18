@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -195,9 +194,15 @@ func (r *groupMembersResource) Delete(ctx context.Context, req resource.DeleteRe
 }
 
 func (r *groupMembersResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	project, group, ok := splitProjectID(req.ID, r.pd)
-	if !ok || strings.Contains(group, "/") || !groupNamePattern.MatchString(group) {
-		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Expected \"<project>/<group name>\" or \"<group name>\", got %q.", req.ID))
+	project, group, err := splitProjectID(req.ID, r.pd)
+	if err == nil {
+		err = validateGroupName(group)
+		if err != nil {
+			err = fmt.Errorf("the group %q %v", group, err)
+		}
+	}
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", importIDError(req.ID, `"<project>/<group>" or "<group>"`, `default/engineering`, err))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project"), project)...)

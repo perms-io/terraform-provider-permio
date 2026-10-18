@@ -2,9 +2,6 @@ package provider
 
 import (
 	"context"
-	"fmt"
-	"strings"
-
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -49,7 +46,7 @@ func (r *groupMemberResource) Schema(ctx context.Context, _ resource.SchemaReque
 			"does not list.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "`<project>/<group>/<principal>`.",
+				MarkdownDescription: "`<project>/<group>/<principal>`, which is also the import ID.",
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
@@ -150,17 +147,10 @@ func (r *groupMemberResource) Delete(ctx context.Context, req resource.DeleteReq
 }
 
 func (r *groupMemberResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	parts := strings.SplitN(req.ID, "/", 3)
-	var project, group, principal string
-	switch {
-	case len(parts) == 3 && projectPattern.MatchString(parts[0]) && groupNamePattern.MatchString(parts[1]):
-		project, group, principal = parts[0], parts[1], parts[2]
-	case len(parts) == 2 && r.pd != nil && groupNamePattern.MatchString(parts[0]):
-		project, group, principal = r.pd.project, parts[0], parts[1]
-	}
-	if group == "" || validateMember(principal) != nil {
-		resp.Diagnostics.AddError("Invalid import ID",
-			fmt.Sprintf("Expected \"<project>/<group>/<principal>\" (or \"<group>/<principal>\" for the provider's project), got %q.", req.ID))
+	project, group, principal, err := parseGroupMemberID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", importIDError(req.ID, `"<project>/<group>/<principal>"`,
+			`default/engineering/user/alice@example.com`, err))
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project"), project)...)

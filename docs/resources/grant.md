@@ -73,7 +73,7 @@ resource "permio_grant" "alice_shared" {
 
 ### Read-Only
 
-- `id` (String) `<project>|<principal>|<resource>`.
+- `id` (String) `<project>|<principal>|<resource>`, which is also the import ID.
 
 <a id="nestedblock--timeouts"></a>
 ### Nested Schema for `timeouts`
@@ -92,7 +92,10 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-# Imported by "<project>|<principal>|<resource URI>", or "<principal>|<resource URI>" for the provider's project.
-# ("|" is used because principals and resource URIs can contain "/"; resource URIs cannot contain "|".)
+# Imported by "<project>|<principal>|<resource URI>". The project is required.
+# The project ends at the first "|" (project names cannot contain "|") and the resource URI starts after the
+# last "|" (resource URIs cannot contain "|"), so the principal is everything in between and may itself
+# contain "|", as Auth0 user IDs do.
 terraform import permio_grant.support_acme "default|group:support|/workspaces/acme"
+terraform import permio_grant.alice_acme "default|auth0|abc123|/workspaces/acme"
 ```

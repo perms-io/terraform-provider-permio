@@ -98,9 +98,11 @@ resource "permio_grant" "alice" {
 			ResourceName: "permio_grant.alice", ImportState: true, ImportStateVerify: true,
 			ImportStateId: "default|alice|/workspaces/acme", ImportStateVerifyIgnore: []string{"timeouts"},
 		},
+		// The project is required: the short form would be ambiguous for principals that contain "|".
 		resource.TestStep{
-			ResourceName: "permio_grant.alice", ImportState: true, ImportStateVerify: true,
-			ImportStateId: "alice|/workspaces/acme", ImportStateVerifyIgnore: []string{"timeouts"},
+			ResourceName: "permio_grant.alice", ImportState: true,
+			ImportStateId: "alice|/workspaces/acme",
+			ExpectError:   regexp.MustCompile(`(?s)three\s+parts\s+separated\s+by\s+"\|".*<project>\|<principal>\|<resource URI>`),
 		},
 		// Drift: something granted outside Terraform on the same pair is revoked.
 		resource.TestStep{
@@ -236,6 +238,13 @@ resource "permio_grant" "alice" {
 			ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 				plancheck.ExpectEmptyPlan(),
 			}},
+			// Only the names on the grant are looked up, not the whole catalogue.
+			Check: func(*tfState) error {
+				if n, m := e.fake.Calls("ListPermissions"), e.fake.Calls("ListRoles"); n != 0 || m != 0 {
+					return fmt.Errorf("ListPermissions called %d times and ListRoles %d times, want 0", n, m)
+				}
+				return nil
+			},
 		},
 	)
 	// Destroy revoked what it could.
@@ -279,26 +288,32 @@ func TestGrant_validation(t *testing.T) {
 	}
 }
 
-func TestParseGrantID(t *testing.T) {
-	pd := &providerData{project: "default"}
-	cases := []struct {
-		id                      string
-		project, principal, uri string
-		ok                      bool
-	}{
-		{"default|alice|/docs/1", "default", "alice", "/docs/1", true},
-		{"alice|/docs/1", "default", "alice", "/docs/1", true},
-		{"prod|group:eng|/w/_/billing", "prod", "group:eng", "/w/_/billing", true},
-		{"prod|odd|name|/docs", "prod", "odd|name", "/docs", true},
-		{"prod|user/with/slashes|/docs", "prod", "user/with/slashes", "/docs", true},
-		{"alice", "", "", "", false},
-		{"default|alice|docs", "", "", "", false},
-		{"BAD|alice|/docs", "", "", "", false},
-	}
-	for _, c := range cases {
-		project, principal, uri, ok := parseGrantID(c.id, pd)
-		if ok != c.ok || project != c.project || principal != c.principal || uri != c.uri {
-			t.Errorf("parseGrantID(%q) = %q, %q, %q, %v; want %q, %q, %q, %v", c.id, project, principal, uri, ok, c.project, c.principal, c.uri, c.ok)
-		}
-	}
+// Auth0 user IDs contain "|", the import ID separator.
+func TestGrant_auth0Principal(t *testing.T) {
+	e := newTestEnv(t)
+	cfg := e.config(`
+resource "permio_permission" "read" { name = "doc.read" }
+resource "permio_grant" "auth0" {
+  principal   = "auth0|abc123"
+  resource    = "/workspaces/acme"
+  permissions = [permio_permission.read.name]
+}`)
+	e.run(
+		resource.TestStep{
+			Config: cfg,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("permio_grant.auth0", "id", "default|auth0|abc123|/workspaces/acme"),
+				e.checkGrant("auth0|abc123", "/workspaces/acme", []string{"doc.read"}, nil),
+			),
+		},
+		resource.TestStep{
+			ResourceName: "permio_grant.auth0", ImportState: true, ImportStateVerify: true,
+			ImportStateId: "default|auth0|abc123|/workspaces/acme", ImportStateVerifyIgnore: []string{"timeouts"},
+		},
+		resource.TestStep{
+			ResourceName: "permio_grant.auth0", ImportState: true,
+			ImportStateId: "Default|auth0|abc123|/workspaces/acme",
+			ExpectError:   regexp.MustCompile(`the\s+project\s+"Default"\s+is\s+not\s+a\s+valid\s+project\s+name`),
+		},
+	)
 }

@@ -93,6 +93,7 @@ data "permio_check" "group_itself" {
 				resource.TestCheckResourceAttr("data.permio_role.by_id", "name", "Editor"),
 
 				resource.TestCheckResourceAttr("data.permio_group.eng", "principal", "group:engineering"),
+				resource.TestCheckResourceAttrPair("data.permio_group.eng", "principal", "permio_group.eng", "principal"),
 				resource.TestCheckResourceAttr("data.permio_group.eng", "description", "Engineers"),
 				resource.TestCheckResourceAttr("data.permio_group.eng", "members.#", "2"),
 				resource.TestCheckTypeSetElemAttr("data.permio_group.eng", "members.*", "alice"),

@@ -3,9 +3,15 @@ package provider
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -61,10 +67,11 @@ resource "permio_role" "editor" {
 			),
 		},
 		// Import by ID, by "<project>/<id>" and by name.
+		// The project is required, because role names can contain "/".
 		resource.TestStep{
-			ResourceName: "permio_role.editor", ImportState: true, ImportStateVerify: true,
-			ImportStateIdFunc:       func(*terraform.State) (string, error) { return id, nil },
-			ImportStateVerifyIgnore: []string{"timeouts"},
+			ResourceName: "permio_role.editor", ImportState: true,
+			ImportStateIdFunc: func(*terraform.State) (string, error) { return id, nil },
+			ExpectError:       regexp.MustCompile(`the\s+project\s+is\s+missing`),
 		},
 		resource.TestStep{
 			ResourceName: "permio_role.editor", ImportState: true, ImportStateVerify: true,
@@ -150,4 +157,122 @@ func TestRole_alreadyExists(t *testing.T) {
 }`),
 		ExpectError: regexp.MustCompile(`Role already exists`),
 	})
+}
+
+// A permission that a role contains is deleted outside Terraform. The API keeps referring to it from the role,
+// GetRole then fails and the role list leaves it out, and the API rejects every change to the role until the
+// permission exists again. The plan must not try (and fail) to change the role forever, and errors must name the
+// permission and say how to fix it.
+func TestRole_deletedPermission(t *testing.T) {
+	e := newTestEnv(t)
+	roleCfg := func(desc string, perms ...string) string {
+		return e.config(fmt.Sprintf(`
+resource "permio_role" "editor" {
+  name        = "Editor"
+  description = %q
+  permissions = ["%s"]
+}`, desc, strings.Join(perms, `", "`)))
+	}
+	brokenErr := regexp.MustCompile(`(?s)refers\s+to\s+the\s+permission\(s\)\s+"doc.write",\s+which\s+no\s+longer\s+exist.*recreate\s+the\s+permission`)
+	e.run(
+		resource.TestStep{
+			PreConfig: func() {
+				for _, n := range []string{"doc.read", "doc.write"} {
+					_, err := e.client.API.CreatePermission(ctx(), &pb.CreatePermissionRequest{ProjectName: "default", Name: n})
+					e.must(err)
+				}
+			},
+			Config: roleCfg("", "doc.read", "doc.write"),
+		},
+		// Deleted out of band. The plan stays empty: the deleted permission stays in the role's state.
+		resource.TestStep{
+			PreConfig: func() {
+				_, err := e.client.API.DeletePermission(ctx(), &pb.DeletePermissionRequest{ProjectName: "default", Name: "doc.write"})
+				e.must(err)
+			},
+			Config: roleCfg("", "doc.read", "doc.write"),
+			ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+				plancheck.ExpectEmptyPlan(),
+			}},
+			Check: resource.TestCheckResourceAttr("permio_role.editor", "permissions.#", "2"),
+		},
+		// Any change to the role fails with an error that names the permission and says what to do.
+		resource.TestStep{
+			Config:      roleCfg("changed", "doc.read", "doc.write"),
+			ExpectError: brokenErr,
+		},
+		resource.TestStep{
+			Config:      roleCfg("", "doc.read"),
+			ExpectError: brokenErr,
+		},
+		// Recreating the permission fixes the role.
+		resource.TestStep{
+			PreConfig: func() {
+				_, err := e.client.API.CreatePermission(ctx(), &pb.CreatePermissionRequest{ProjectName: "default", Name: "doc.write"})
+				e.must(err)
+			},
+			Config: roleCfg("changed", "doc.read", "doc.write"),
+			Check:  e.checkRole("Editor", "doc.read", "doc.write"),
+		},
+		resource.TestStep{
+			Config: roleCfg("changed", "doc.read"),
+			Check:  e.checkRole("Editor", "doc.read"),
+		},
+	)
+}
+
+// Reading such a role reports a warning that names the deleted permission.
+func TestRole_readWarnsAboutDeletedPermission(t *testing.T) {
+	e := newTestEnv(t)
+	for _, n := range []string{"doc.read", "doc.write"} {
+		_, err := e.client.API.CreatePermission(ctx(), &pb.CreatePermissionRequest{ProjectName: "default", Name: n})
+		e.must(err)
+	}
+	role, err := e.client.API.CreateRole(ctx(), &pb.CreateRoleRequest{ProjectName: "default", Name: "Editor", Permissions: []string{"doc.read", "doc.write"}})
+	e.must(err)
+	_, err = e.client.API.DeletePermission(ctx(), &pb.DeletePermissionRequest{ProjectName: "default", Name: "doc.write"})
+	e.must(err)
+
+	// The fake behaves like the real service.
+	if _, err := e.client.API.GetRole(ctx(), &pb.GetRoleRequest{ProjectName: "default", Id: role.GetId()}); err == nil {
+		t.Fatal("GetRole succeeded for a role that refers to a deleted permission")
+	}
+	e.must(e.checkRole("Editor", "doc.read")(nil))
+
+	r := &roleResource{pd: &providerData{client: e.client, project: "default"}}
+	var schemaResp fwresource.SchemaResponse
+	r.Schema(ctx(), fwresource.SchemaRequest{}, &schemaResp)
+	read := func(known ...string) (*fwresource.ReadResponse, roleModel) {
+		state := tfsdk.State{Schema: schemaResp.Schema}
+		e.must(diagErr(state.Set(ctx(), &roleModel{
+			ID: types.StringValue(role.GetId()), Project: types.StringValue("default"), Name: types.StringValue("Editor"),
+			Description: types.StringValue(""), Permissions: stringsToSet(known),
+			Timeouts: timeouts.Value{Object: types.ObjectNull(map[string]attr.Type{
+				"create": types.StringType, "read": types.StringType, "update": types.StringType, "delete": types.StringType,
+			})},
+		})))
+		resp := &fwresource.ReadResponse{State: state}
+		r.Read(ctx(), fwresource.ReadRequest{State: state}, resp)
+		var got roleModel
+		e.must(diagErr(resp.State.Get(ctx(), &got)))
+		return resp, got
+	}
+
+	resp, got := read("doc.read", "doc.write")
+	if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 {
+		t.Fatalf("diagnostics = %v, want one warning", resp.Diagnostics)
+	}
+	w := resp.Diagnostics.Warnings()[0]
+	if w.Summary() != brokenRoleSummary || !strings.Contains(w.Detail(), `"doc.write", which no longer exist`) || !strings.Contains(w.Detail(), "recreate the permission") {
+		t.Errorf("warning = %q: %q", w.Summary(), w.Detail())
+	}
+	if perms := setToStrings(ctx(), got.Permissions, &resp.Diagnostics); strings.Join(perms, ",") != "doc.read,doc.write" {
+		t.Errorf("permissions in state = %v, want the deleted one kept", perms)
+	}
+
+	// Without a prior state (after an import), the API cannot say which permission is missing.
+	resp, _ = read()
+	if resp.Diagnostics.WarningsCount() != 1 || !strings.Contains(resp.Diagnostics.Warnings()[0].Detail(), "at least one permission that no longer exists") {
+		t.Errorf("diagnostics = %v, want a warning about an unnamed permission", resp.Diagnostics)
+	}
 }

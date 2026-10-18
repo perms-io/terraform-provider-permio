@@ -5,8 +5,9 @@ subcategory: ""
 description: |-
   A permission: an action that can be performed on a resource, such as document.read. Permissions are granted to principals directly or through roles.
   Permission names are unique across the whole organisation, not just the project.
-  Renaming a permission is done in place. Roles in the project that contain the permission keep it under its new name: if any role contains it, the provider creates the permission under the new name, moves those roles over and deletes the old one (so id changes). Grants are not rewritten, so grant the new name (for example by referencing permio_permission.<name>.name from permio_grant).
-  Deleting a permission first removes it from the roles in the project that contain it, because the API cannot read a role that refers to a deleted permission. It fails if the permission is a role's only one.
+  Renaming a permission is done in place. Roles in the project that contain the permission keep it under its new name: if any role contains it, the provider creates the permission under the new name, moves those roles over and deletes the old one (so id changes). If that is interrupted, the next apply finishes it. A rename fails, rather than taking the permission over, if a permission with the new name already exists. Grants are not rewritten, so grant the new name (for example by referencing permio_permission.<name>.name from permio_grant).
+  The API does not remove a deleted permission from roles, and a role that refers to a deleted permission can no longer be changed or deleted, so the provider never leaves a role referring to one:
+  Destroying a permission first removes it from the roles in the project that contain it, with a warning that names them (managed roles that still list it then show a change on the next plan). It fails if the permission is a role's only one.Replacing a permission (for example because project changed, or with -replace) fails while any role contains it, and the error names the roles, because the roles would otherwise lose the permission until a later apply. Remove it from the roles first.
 ---
 
 # permio_permission (Resource)
@@ -15,9 +16,12 @@ A permission: an action that can be performed on a resource, such as `document.r
 
 Permission names are unique across the whole organisation, not just the project.
 
-Renaming a permission is done in place. Roles in the project that contain the permission keep it under its new name: if any role contains it, the provider creates the permission under the new name, moves those roles over and deletes the old one (so `id` changes). Grants are not rewritten, so grant the new name (for example by referencing `permio_permission.<name>.name` from `permio_grant`).
+Renaming a permission is done in place. Roles in the project that contain the permission keep it under its new name: if any role contains it, the provider creates the permission under the new name, moves those roles over and deletes the old one (so `id` changes). If that is interrupted, the next apply finishes it. A rename fails, rather than taking the permission over, if a permission with the new name already exists. Grants are not rewritten, so grant the new name (for example by referencing `permio_permission.<name>.name` from `permio_grant`).
 
-Deleting a permission first removes it from the roles in the project that contain it, because the API cannot read a role that refers to a deleted permission. It fails if the permission is a role's only one.
+The API does not remove a deleted permission from roles, and a role that refers to a deleted permission can no longer be changed or deleted, so the provider never leaves a role referring to one:
+
+* **Destroying** a permission first removes it from the roles in the project that contain it, with a warning that names them (managed roles that still list it then show a change on the next plan). It fails if the permission is a role's only one.
+* **Replacing** a permission (for example because `project` changed, or with `-replace`) fails while any role contains it, and the error names the roles, because the roles would otherwise lose the permission until a later apply. Remove it from the roles first.
 
 ## Example Usage
 
@@ -63,5 +67,6 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 
 ```shell
 # A permission can be imported by "<project>/<name>" or by "<name>" (the provider's project).
+# Permission names cannot contain "/", so the two forms cannot be confused.
 terraform import permio_permission.document_read default/document.read
 ```

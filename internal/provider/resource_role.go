@@ -3,10 +3,13 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -48,7 +51,11 @@ func (r *roleResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "A role: a named set of permissions. Grant a role to a principal with `permio_grant`, using " +
 			"the role's `id`.\n\nRole names are unique across the whole organisation, not just the project. A role can be " +
-			"renamed in place.",
+			"renamed in place.\n\n" +
+			"If a permission that the role contains is deleted outside Terraform, Permio keeps referring to it from " +
+			"the role, and the API then rejects every change to the role until the permission exists again. The " +
+			"provider reports this as a warning that names the permission, keeps it in the role's state so that the " +
+			"plan stays clean, and explains how to fix it: recreate the permission.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "Role ID assigned by Permio. Grants refer to roles by this ID.",
@@ -142,21 +149,84 @@ func (r *roleResource) Create(ctx context.Context, req resource.CreateRequest, r
 // getRole reads a role, or returns nil if it does not exist. GetRole fails with Internal for a role that refers to
 // a permission which no longer exists; listing roles does not, so it is used as a fallback.
 func getRole(ctx context.Context, c *client.Client, project, id string) (*pb.Role, error) {
-	role, err := c.API.GetRole(ctx, &pb.GetRoleRequest{ProjectName: project, Id: id})
+	role, _, err := readRole(ctx, c, project, id)
+	return role, err
+}
+
+// readRole is getRole that also reports whether the role had to be read from the role list because GetRole
+// failed. That means the role refers to at least one permission that no longer exists, and the role returned
+// leaves such permissions out (the list skips them). The API cannot update or delete such a role.
+func readRole(ctx context.Context, c *client.Client, project, id string) (role *pb.Role, broken bool, err error) {
+	role, err = c.API.GetRole(ctx, &pb.GetRoleRequest{ProjectName: project, Id: id})
 	switch {
 	case err == nil:
-		return role, nil
+		return role, false, nil
 	case client.IsNotFound(err):
-		return nil, nil
+		return nil, false, nil
 	case client.Code(err) == codes.Internal:
 		listed, listErr := c.FindRoleByID(ctx, project, id)
-		if listErr != nil {
+		if listErr != nil || listed == nil {
+			return nil, false, err
+		}
+		return listed, true, nil
+	default:
+		return nil, false, err
+	}
+}
+
+// deletedPermissions returns the names among candidates that no longer exist in the project.
+func deletedPermissions(ctx context.Context, c *client.Client, project string, candidates []string) ([]string, error) {
+	var deleted []string
+	for _, name := range candidates {
+		_, err := c.API.GetPermission(ctx, &pb.GetPermissionRequest{ProjectName: project, Name: name})
+		switch {
+		case client.IsNotFound(err):
+			deleted = append(deleted, name)
+		case err != nil:
 			return nil, err
 		}
-		return listed, nil
-	default:
-		return nil, err
 	}
+	return deleted, nil
+}
+
+const brokenRoleSummary = "Role refers to a permission that no longer exists"
+
+// brokenRoleDetail explains a role that refers to deleted permissions, and what to do about it.
+func brokenRoleDetail(role *pb.Role, project string, deleted []string) string {
+	which := "at least one permission that no longer exists in project " + strconv.Quote(project) +
+		" (the API does not say which: compare the role's permissions with the ones you expect)"
+	if len(deleted) > 0 {
+		quoted := make([]string, len(deleted))
+		for i, n := range deleted {
+			quoted[i] = strconv.Quote(n)
+		}
+		which = "the permission(s) " + strings.Join(quoted, ", ") + ", which no longer exist in project " + strconv.Quote(project)
+	}
+	return fmt.Sprintf("The role %q (ID %s) refers to %s. Permio does not remove a deleted permission from roles. "+
+		"The role does not grant a permission that no longer exists, and until the permission exists again the "+
+		"Permio API rejects every change to the role, including removing the permission from it and deleting the "+
+		"role.\n\n"+
+		"To fix it, recreate the permission with the same name in the same project (for example by restoring its "+
+		"permio_permission resource) and apply. The role then grants it again, and you can remove the permission "+
+		"from the role's permissions, and delete it, as usual.\n\n"+
+		"Until then, keep the permission in the role's permissions: Terraform keeps it in the role's state, so the "+
+		"plan does not try to change the role. Removing it from the configuration makes the next apply fail with "+
+		"this error.", role.GetName(), role.GetId(), which)
+}
+
+// explainBrokenRole adds a clear error if a failed change to a role failed because the role refers to a deleted
+// permission, and reports whether it did.
+func explainBrokenRole(ctx context.Context, c *client.Client, project, id string, known []string, summary string, diags *diag.Diagnostics) bool {
+	role, broken, err := readRole(ctx, c, project, id)
+	if err != nil || !broken {
+		return false
+	}
+	deleted, err := deletedPermissions(ctx, c, project, difference(known, client.PermissionNames(role)))
+	if err != nil {
+		return false
+	}
+	diags.AddError(summary, brokenRoleDetail(role, project, deleted))
+	return true
 }
 
 func (r *roleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -170,7 +240,8 @@ func (r *roleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	defer cancel()
 
 	project := projectOf(state.Project, r.pd)
-	role, err := getRole(ctx, r.pd.client, project, state.ID.ValueString())
+	known := setToStrings(ctx, state.Permissions, &resp.Diagnostics)
+	role, broken, err := readRole(ctx, r.pd.client, project, state.ID.ValueString())
 	if err != nil {
 		client.AddError(&resp.Diagnostics, "Unable to read role", err)
 		return
@@ -180,12 +251,26 @@ func (r *roleResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 	r.setFromAPI(&state, project, role)
+	if broken {
+		// The role still refers to permissions that were deleted, and the API cannot change it until they exist
+		// again. Keep the deleted permissions that the state already has, so that the plan does not try (and fail)
+		// to add them back, and say what is wrong on every plan.
+		listed := client.PermissionNames(role)
+		deleted, err := deletedPermissions(ctx, r.pd.client, project, difference(known, listed))
+		if err != nil {
+			client.AddError(&resp.Diagnostics, "Unable to read role", err)
+			return
+		}
+		state.Permissions = stringsToSet(append(listed, deleted...))
+		resp.Diagnostics.AddWarning(brokenRoleSummary, brokenRoleDetail(role, project, deleted))
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan roleModel
+	var plan, state roleModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() || !requireClient(r.pd, &resp.Diagnostics) {
 		return
 	}
@@ -202,7 +287,10 @@ func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		ProjectName: project, Id: plan.ID.ValueString(), Name: plan.Name.ValueString(), Description: plan.Description.ValueString(), Permissions: perms,
 	})
 	if err != nil {
-		client.AddError(&resp.Diagnostics, "Unable to update role", err)
+		known := setToStrings(ctx, state.Permissions, &resp.Diagnostics)
+		if !explainBrokenRole(ctx, r.pd.client, project, plan.ID.ValueString(), known, "Unable to update role", &resp.Diagnostics) {
+			client.AddError(&resp.Diagnostics, "Unable to update role", err)
+		}
 		return
 	}
 	r.setFromAPI(&plan, project, role)
@@ -219,16 +307,21 @@ func (r *roleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	ctx, cancel := withTimeout(ctx, t, d, &resp.Diagnostics)
 	defer cancel()
 
-	_, err := r.pd.client.API.DeleteRole(ctx, &pb.DeleteRoleRequest{ProjectName: projectOf(state.Project, r.pd), Id: state.ID.ValueString()})
+	project := projectOf(state.Project, r.pd)
+	_, err := r.pd.client.API.DeleteRole(ctx, &pb.DeleteRoleRequest{ProjectName: project, Id: state.ID.ValueString()})
 	if err != nil && !client.IsNotFound(err) {
-		client.AddError(&resp.Diagnostics, "Unable to delete role", err)
+		known := setToStrings(ctx, state.Permissions, &resp.Diagnostics)
+		if !explainBrokenRole(ctx, r.pd.client, project, state.ID.ValueString(), known, "Unable to delete role", &resp.Diagnostics) {
+			client.AddError(&resp.Diagnostics, "Unable to delete role", err)
+		}
 	}
 }
 
 func (r *roleResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	project, ref, ok := splitProjectID(req.ID, r.pd)
-	if !ok {
-		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Expected \"<project>/<role ID or name>\" or \"<role ID or name>\", got %q.", req.ID))
+	project, ref, err := parseRoleID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", importIDError(req.ID, `"<project>/<role ID>" or "<project>/<role name>"`,
+			`default/Document editor`, err))
 		return
 	}
 	if !requireClient(r.pd, &resp.Diagnostics) {
