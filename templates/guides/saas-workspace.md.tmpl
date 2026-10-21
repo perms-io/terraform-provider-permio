@@ -1,0 +1,24 @@
+---
+page_title: "Modelling a SaaS workspace"
+subcategory: ""
+description: |-
+  A complete example: permissions, roles, teams as groups, inherited grants and policy checks.
+---
+
+# Modelling a SaaS workspace
+
+This example models a multi-tenant SaaS product. Each workspace has projects, and projects have
+documents:
+
+```
+/workspaces/<workspace>                              workspace-wide grants
+/workspaces/<workspace>/projects/<project>           project-level grants
+/workspaces/<workspace>/projects/<project>/docs/<id> documents inherit both
+```
+
+It defines a set of permissions, builds roles from them, models teams as groups, and grants roles to
+the groups on the workspace, so that every project and document inherits them. A wildcard grant
+(`/projects/_/help-centre`) covers the help-centre of every project. Finally, `permio_check` data
+sources and a `check` block assert the intended policy.
+
+{{ tffile "examples/saas-workspace/main.tf" }}

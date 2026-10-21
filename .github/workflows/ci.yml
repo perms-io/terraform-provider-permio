@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Vet and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: go mod download
+      - run: go build -v ./...
+      - run: go vet ./...
+      - name: Unit tests (in-process fake API)
+        run: go test -race -count=1 ./...
+
+  docs:
+    name: Docs and formatting up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: go mod tidy && git diff --exit-code -- go.mod go.sum
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: terraform fmt -check -recursive examples
+      - run: go generate ./...
+      - name: Fail if docs/ is out of date
+        run: |
+          git add -N docs
+          git diff --exit-code -- docs || (echo "Run 'go generate ./...' and commit docs/." && exit 1)
+
+  acceptance:
+    name: Acceptance tests (real API)
+    runs-on: ubuntu-latest
+    # Runs on main only, and skips itself unless the PERMIO_API_KEY secret is configured.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    concurrency: acceptance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: Run acceptance tests
+        env:
+          PERMIO_API_KEY: ${{ secrets.PERMIO_API_KEY }}
+          PERMIO_API_URL: ${{ vars.PERMIO_API_URL }}
+          PERMIO_PROJECT: ${{ vars.PERMIO_PROJECT }}
+        run: |
+          if [ -z "$PERMIO_API_KEY" ]; then echo "PERMIO_API_KEY secret not set; skipping."; exit 0; fi
+          TF_ACC=1 go test -count=1 -run TestAcc -v -timeout 30m ./internal/provider/
