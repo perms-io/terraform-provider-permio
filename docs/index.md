@@ -60,5 +60,5 @@ See the [SaaS workspace guide](guides/saas-workspace) for a complete example.
 ### Optional
 
 - `api_key` (String, Sensitive) Permio API key (`perms_...`). Can also be set with the `PERMIO_API_KEY` environment variable. An API key belongs to one organisation and one project. Managing objects needs a full-access key; a check-only key is enough for the data sources.
-- `api_url` (String) Address of the Permio gRPC API, as `host:port` or `https://host[:port]`. Defaults to `temp-api.perms.io:443` (production). Can also be set with the `PERMIO_API_URL` environment variable. Use `dev-api.perms.io:443` for the development environment. An `http://host:port` URL connects without TLS, for a local server.
+- `api_url` (String) Address of the Permio gRPC API, as `host:port` or `https://host[:port]`. Defaults to `api.perms.io:443` (production). Can also be set with the `PERMIO_API_URL` environment variable. Use `dev-api.perms.io:443` for the development environment. An `http://host:port` URL connects without TLS, for a local server.
 - `project` (String) Default project for resources and data sources that do not set `project`. Defaults to `default`. Can also be set with the `PERMIO_PROJECT` environment variable.
