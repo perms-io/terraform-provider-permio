@@ -20,7 +20,7 @@ import (
 
 const (
 	// DefaultEndpoint is the production Permio API.
-	DefaultEndpoint = "temp-api.perms.io:443"
+	DefaultEndpoint = "api.perms.io:443"
 	// DefaultProject is the project that every Permio organisation starts with.
 	DefaultProject = "default"
 

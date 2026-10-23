@@ -65,7 +65,7 @@ data source evaluates permission checks, so you can write policy tests in Terraf
 | Argument  | Environment variable | Default                  |
 |-----------|----------------------|--------------------------|
 | `api_key` | `PERMIO_API_KEY`     | (required)               |
-| `api_url` | `PERMIO_API_URL`     | `temp-api.perms.io:443`  |
+| `api_url` | `PERMIO_API_URL`     | `api.perms.io:443`       |
 | `project` | `PERMIO_PROJECT`     | `default`                |
 
 An API key belongs to one organisation and one project. Managing objects needs a full-access key;

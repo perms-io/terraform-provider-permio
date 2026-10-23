@@ -24,7 +24,7 @@ func TestParseEndpoint(t *testing.T) {
 		plaintext bool
 		err       bool
 	}{
-		{"", "temp-api.perms.io:443", false, false},
+		{"", "api.perms.io:443", false, false},
 		{"api.perms.io:443", "api.perms.io:443", false, false},
 		{"api.perms.io", "api.perms.io:443", false, false},
 		{"https://dev-api.perms.io", "dev-api.perms.io:443", false, false},
