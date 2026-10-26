@@ -106,4 +106,4 @@ pointing at the directory containing the built `terraform-provider-permio` binar
 
 ## License
 
-[MPL-2.0](LICENSE)
+[Apache-2.0](LICENSE)

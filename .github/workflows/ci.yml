@@ -8,16 +8,20 @@ on:
 permissions:
   contents: read
 
+# Jobs run on Blacksmith runners. Blacksmith's colocated cache backs actions/cache, so setup-go's module and build
+# cache (keyed on go.sum) is restored from Blacksmith; useblacksmith/checkout keeps a git mirror on a sticky disk.
+
 jobs:
   test:
     name: Vet and test
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: useblacksmith/checkout@v1
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.sum
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
@@ -29,13 +33,14 @@ jobs:
 
   docs:
     name: Docs and formatting up to date
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: useblacksmith/checkout@v1
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.sum
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
@@ -50,16 +55,17 @@ jobs:
 
   acceptance:
     name: Acceptance tests (real API)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     # Runs on main only, and skips itself unless the PERMIO_API_KEY secret is configured.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     concurrency: acceptance
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: useblacksmith/checkout@v1
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.sum
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
