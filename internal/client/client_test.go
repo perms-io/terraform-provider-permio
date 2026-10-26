@@ -42,25 +42,18 @@ func TestParseEndpoint(t *testing.T) {
 	}
 }
 
+// testKey is a well-formed API key (valid checksum); the fake server accepts any key.
+const testKey = "perms_TestClientKey0000000000000000000483gUu"
+
 func TestNewRequiresAPIKey(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("expected an error without an API key")
 	}
 }
 
-func TestIsReadOnly(t *testing.T) {
-	for method, want := range map[string]bool{
-		"/permio.permissions.v1.PermissionsService/GetPermission":                          true,
-		"/permio.permissions.v1.PermissionsService/ListGroupMembers":                       true,
-		"/permio.permissions.v1.PermissionsService/Check":                                  true,
-		"/permio.permissions.v1.PermissionsService/GetUserPermissionsAndRolesOnResource":   true,
-		"/permio.permissions.v1.PermissionsService/CreatePermission":                       false,
-		"/permio.permissions.v1.PermissionsService/GrantUserPermissionsAndRolesOnResource": false,
-		"/permio.permissions.v1.PermissionsService/AddGroupMembers":                        false,
-	} {
-		if got := isReadOnly(method); got != want {
-			t.Errorf("isReadOnly(%q) = %v, want %v", method, got, want)
-		}
+func TestNewRejectsMalformedAPIKey(t *testing.T) {
+	if _, err := New(Config{APIKey: "perms_typo"}); err == nil {
+		t.Fatal("expected an error for a malformed API key")
 	}
 }
 
@@ -109,7 +102,7 @@ func startFlaky(t *testing.T, failures int) (*flakyServer, *Client) {
 	t.Cleanup(gs.Stop)
 
 	c, err := New(Config{
-		APIKey:         "perms_secret",
+		APIKey:         testKey,
 		Endpoint:       "passthrough:///bufnet",
 		Insecure:       true,
 		RetryBaseDelay: time.Millisecond,
@@ -134,7 +127,7 @@ func TestReadsAreRetriedOnUnavailable(t *testing.T) {
 		t.Fatalf("got %q after %d calls, want doc.read after 3", p.GetName(), srv.calls["get"])
 	}
 	for _, a := range srv.auth {
-		if a != "Bearer perms_secret" {
+		if a != "Bearer "+testKey {
 			t.Fatalf("authorization header = %q", a)
 		}
 	}

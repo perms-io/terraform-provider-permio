@@ -36,8 +36,8 @@ type Key struct {
 
 // Default API keys for tests.
 const (
-	FullAccessKey = "perms_test_full_access"
-	CheckOnlyKey  = "perms_test_check_only"
+	FullAccessKey = "perms_TestFullAccess0000000000000000003G9coQ"
+	CheckOnlyKey  = "perms_TestCheckOnly000000000000000000023gF85"
 	OrgID         = "org-test"
 )
 
