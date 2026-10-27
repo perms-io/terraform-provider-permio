@@ -1,10 +1,10 @@
-// Package client is a small gRPC client for the Permio PermissionsService. It handles the connection, API key
-// authentication, retries of read-only calls on transient failures, pagination and the mapping of API errors to
-// Terraform diagnostics.
+// Package client connects the provider to the Permio PermissionsService through the public Go SDK
+// (github.com/PrivateJAR/permio-go), which handles API key validation and authentication, per-attempt timeouts and
+// retries of read-only calls. This package adds the provider's endpoint handling, pagination helpers and the mapping
+// of API errors to Terraform diagnostics.
 package client
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	permio "github.com/PrivateJAR/permio-go"
 	permissionsv1 "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -41,8 +42,9 @@ type Config struct {
 	Insecure bool
 	// DialOptions are appended to the dial options (used by tests to dial an in-process server).
 	DialOptions []grpc.DialOption
-	// MaxRetries is the number of times a read-only call is retried after an Unavailable error. Zero means the
-	// default (4); a negative value disables retries.
+	// MaxRetries is the number of times a read-only call is retried after an Unavailable or DeadlineExceeded error
+	// (or a rate limit with a short server-given delay). Zero means the default (4); a negative value disables
+	// retries.
 	MaxRetries int
 	// RetryBaseDelay is the delay before the first retry; later retries back off exponentially. Zero means 250ms.
 	RetryBaseDelay time.Duration
@@ -51,8 +53,11 @@ type Config struct {
 // Client is a connection to the Permio API.
 type Client struct {
 	conn *grpc.ClientConn
+	// SDK is the Permio Go SDK client wrapping the connection. It has no default project: the provider passes the
+	// project on every request.
+	SDK *permio.Client
 	// API is the generated PermissionsService client. Calls through it are authenticated and, for read-only RPCs,
-	// retried on transient errors.
+	// retried on transient errors. Errors are *permio.Error values, which status.Code and status.FromError read.
 	API permissionsv1.PermissionsServiceClient
 }
 
@@ -74,26 +79,20 @@ func New(cfg Config) (*Client, error) {
 		transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
 	}
 
-	retries := cfg.MaxRetries
-	if retries == 0 {
-		retries = 4
+	if cfg.MaxRetries == 0 {
+		cfg.MaxRetries = 4
 	}
-	if retries < 0 {
-		retries = 0
+	if cfg.RetryBaseDelay == 0 {
+		cfg.RetryBaseDelay = 250 * time.Millisecond
 	}
-	baseDelay := cfg.RetryBaseDelay
-	if baseDelay == 0 {
-		baseDelay = 250 * time.Millisecond
+	// Checked here so a malformed key fails before the connection is created.
+	if _, err := permio.ValidateAPIKey(cfg.APIKey); err != nil {
+		return nil, errors.New(strings.TrimPrefix(err.Error(), "permio: "))
 	}
 
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(transport),
-		grpc.WithPerRPCCredentials(bearerToken{token: cfg.APIKey, requireTLS: !plaintext}),
-		grpc.WithChainUnaryInterceptor(
-			timeoutInterceptor(defaultCallTimeout),
-			retryInterceptor(retries, baseDelay),
-		),
-	}
+	// The provider dials itself so that api_url can also be any gRPC target (passthrough:///, unix://, ...); the
+	// SDK then adds authentication, timeouts and retries on top of the connection.
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(transport)}
 	if cfg.UserAgent != "" {
 		opts = append(opts, grpc.WithUserAgent(cfg.UserAgent))
 	}
@@ -103,7 +102,17 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating gRPC client for %q: %w", target, err)
 	}
-	return &Client{conn: conn, API: permissionsv1.NewPermissionsServiceClient(conn)}, nil
+	sdk, err := permio.New(permio.Options{
+		APIKey:  cfg.APIKey,
+		Conn:    conn,
+		Timeout: defaultCallTimeout,
+		Retry:   permio.RetryOptions{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryBaseDelay, MaxDelay: 5 * time.Second},
+	})
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return &Client{conn: conn, SDK: sdk, API: sdk.Permissions()}, nil
 }
 
 // Close closes the connection.
@@ -142,29 +151,4 @@ func parseEndpoint(endpoint string) (target string, plaintext bool, err error) {
 		}
 	}
 	return endpoint, plaintext, nil
-}
-
-// bearerToken sends "authorization: Bearer <token>" with every call.
-type bearerToken struct {
-	token      string
-	requireTLS bool
-}
-
-func (b bearerToken) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
-	return map[string]string{"authorization": "Bearer " + b.token}, nil
-}
-
-func (b bearerToken) RequireTransportSecurity() bool { return b.requireTLS }
-
-// timeoutInterceptor gives calls without a deadline a default one, so a hung connection cannot stall Terraform
-// forever.
-func timeoutInterceptor(d time.Duration) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		if _, ok := ctx.Deadline(); !ok {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, d)
-			defer cancel()
-		}
-		return invoker(ctx, method, req, reply, cc, opts...)
-	}
 }

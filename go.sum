@@ -12,8 +12,8 @@ github.com/Masterminds/sprig/v3 v3.2.3 h1:eL2fZNezLomi0uOLqjQoN6BfsDD+fyLtgbJMAj
 github.com/Masterminds/sprig/v3 v3.2.3/go.mod h1:rXcFaZ2zZbLRJv/xSysmlgIM1u11eBaRMhvYXJNkGuM=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/PrivateJAR/permio-go v0.0.18 h1:kW2lz51kpWPKueTiLloVD2mGrm9Thi2eyYmINlBMNJ8=
-github.com/PrivateJAR/permio-go v0.0.18/go.mod h1:UkKflRuJ9Cy9ySu550/YisTjFXfXw1frM53LgRYpg44=
+github.com/PrivateJAR/permio-go v0.1.0 h1:KcvHi3p+8jVkIyvass5j8nQtRP7+223VbQXlgFv6ftg=
+github.com/PrivateJAR/permio-go v0.1.0/go.mod h1:S+slfXs4baQOIFc0+ksLMGQrklvLmEl+0tW9LloXHak=
 github.com/ProtonMail/go-crypto v1.4.1 h1:9RfcZHqEQUvP8RzecWEUafnZVtEvrBVL9BiF67IQOfM=
 github.com/ProtonMail/go-crypto v1.4.1/go.mod h1:e1OaTyu5SYVrO9gKOEhTc+5UcXtTUa+P3uLudwcgPqo=
 github.com/agext/levenshtein v1.2.3 h1:YB2fHEn0UJagG8T1rrWknE3ZQzWM06O8AMAatNn7lmo=

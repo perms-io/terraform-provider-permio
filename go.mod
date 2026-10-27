@@ -3,7 +3,7 @@ module github.com/PrivateJAR/terraform-provider-permio
 go 1.25.8
 
 require (
-	github.com/PrivateJAR/permio-go v0.0.18
+	github.com/PrivateJAR/permio-go v0.1.0
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
 	github.com/hashicorp/terraform-plugin-framework-timeouts v0.7.0
 	github.com/hashicorp/terraform-plugin-framework-validators v0.19.0
