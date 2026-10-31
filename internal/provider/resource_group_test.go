@@ -4,9 +4,9 @@ import (
 	"regexp"
 	"testing"
 
-	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	pb "github.com/perms-io/permio-go/proto/permissions/v1"
 )
 
 func TestGroup_lifecycle(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/PrivateJAR/terraform-provider-permio/internal/provider"
+	"github.com/perms-io/terraform-provider-permio/internal/provider"
 )
 
 // Generate the Registry documentation in docs/ from the provider schema, examples/ and templates/.

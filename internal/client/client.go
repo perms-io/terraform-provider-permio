@@ -1,5 +1,5 @@
 // Package client connects the provider to the Permio PermissionsService through the public Go SDK
-// (github.com/PrivateJAR/permio-go), which handles API key validation and authentication, per-attempt timeouts and
+// (github.com/perms-io/permio-go), which handles API key validation and authentication, per-attempt timeouts and
 // retries of read-only calls. This package adds the provider's endpoint handling, pagination helpers and the mapping
 // of API errors to Terraform diagnostics.
 package client
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	permio "github.com/PrivateJAR/permio-go"
-	permissionsv1 "github.com/PrivateJAR/permio-go/proto/permissions/v1"
+	permio "github.com/perms-io/permio-go"
+	permissionsv1 "github.com/perms-io/permio-go/proto/permissions/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	pb "github.com/perms-io/permio-go/proto/permissions/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
