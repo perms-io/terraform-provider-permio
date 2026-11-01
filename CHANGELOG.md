@@ -1,3 +1,9 @@
+## 0.1.1 (Unreleased)
+
+DOCUMENTATION:
+
+* The provider docs no longer describe `api_url` beyond its default; it does not normally need setting.
+
 ## 0.1.0 (November 1, 2026)
 
 Initial release.
