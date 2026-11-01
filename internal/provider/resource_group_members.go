@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/PrivateJAR/terraform-provider-permio/internal/client"
+	"github.com/perms-io/terraform-provider-permio/internal/client"
 )
 
 var (

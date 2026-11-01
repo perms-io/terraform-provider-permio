@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -12,8 +11,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	pb "github.com/perms-io/permio-go/proto/permissions/v1"
 
-	"github.com/PrivateJAR/terraform-provider-permio/internal/client"
+	"github.com/perms-io/terraform-provider-permio/internal/client"
 )
 
 // ---------------------------------------------------------------------------------------------------------------

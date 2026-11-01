@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
+	pb "github.com/perms-io/permio-go/proto/permissions/v1"
 )
 
 func TestParseGrantID(t *testing.T) {

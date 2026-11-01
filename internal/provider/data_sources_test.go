@@ -4,10 +4,10 @@ import (
 	"regexp"
 	"testing"
 
-	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	pb "github.com/perms-io/permio-go/proto/permissions/v1"
 
-	"github.com/PrivateJAR/terraform-provider-permio/internal/fakeserver"
+	"github.com/perms-io/terraform-provider-permio/internal/fakeserver"
 )
 
 const dataSourceBase = `

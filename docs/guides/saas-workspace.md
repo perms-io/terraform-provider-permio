@@ -34,7 +34,7 @@ sources and a `check` block assert the intended policy.
 terraform {
   required_providers {
     permio = {
-      source = "PrivateJAR/permio"
+      source = "perms-io/permio"
     }
   }
 }

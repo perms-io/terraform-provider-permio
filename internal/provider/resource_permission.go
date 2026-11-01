@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -17,9 +16,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	pb "github.com/perms-io/permio-go/proto/permissions/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/PrivateJAR/terraform-provider-permio/internal/client"
+	"github.com/perms-io/terraform-provider-permio/internal/client"
 )
 
 var (

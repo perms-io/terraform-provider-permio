@@ -28,7 +28,7 @@ key's project.
 terraform {
   required_providers {
     permio = {
-      source = "PrivateJAR/permio"
+      source = "perms-io/permio"
     }
   }
 }

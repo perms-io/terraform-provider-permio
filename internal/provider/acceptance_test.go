@@ -5,14 +5,14 @@ import (
 	"os"
 	"testing"
 
-	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	pb "github.com/perms-io/permio-go/proto/permissions/v1"
 
-	"github.com/PrivateJAR/terraform-provider-permio/internal/client"
+	"github.com/perms-io/terraform-provider-permio/internal/client"
 )
 
 // Acceptance tests run against a real Permio API. They need TF_ACC=1 and a full-access PERMIO_API_KEY, and use

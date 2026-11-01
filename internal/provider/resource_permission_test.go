@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/PrivateJAR/permio-go/proto/permissions/v1"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	pb "github.com/perms-io/permio-go/proto/permissions/v1"
 	"google.golang.org/grpc/codes"
 )
 

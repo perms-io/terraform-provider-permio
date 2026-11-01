@@ -21,7 +21,7 @@ data source evaluates permission checks, so you can write policy tests in Terraf
    terraform {
      required_providers {
        permio = {
-         source = "PrivateJAR/permio"
+         source = "perms-io/permio"
        }
      }
    }

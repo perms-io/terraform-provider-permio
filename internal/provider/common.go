@@ -18,7 +18,7 @@ import (
 	dsschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"google.golang.org/grpc/codes"
 
-	"github.com/PrivateJAR/terraform-provider-permio/internal/client"
+	"github.com/perms-io/terraform-provider-permio/internal/client"
 )
 
 const (
