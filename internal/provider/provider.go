@@ -82,10 +82,9 @@ func (p *PermioProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 				Sensitive: true,
 			},
 			"api_url": schema.StringAttribute{
-				MarkdownDescription: "Address of the Permio gRPC API, as `host:port` or `https://host[:port]`. Defaults to " +
-					"`" + client.DefaultEndpoint + "` (production). Can also be set with the `PERMIO_API_URL` environment " +
-					"variable. Use `dev-api.perms.io:443` for the development environment. An `http://host:port` URL " +
-					"connects without TLS, for a local server.",
+				MarkdownDescription: "Address of the Permio API. Defaults to `" + client.DefaultEndpoint + "`, which is " +
+					"what you want; there is normally no need to set it. Can also be set with the `PERMIO_API_URL` " +
+					"environment variable.",
 				Optional: true,
 			},
 			"project": schema.StringAttribute{
