@@ -6,7 +6,11 @@ description: |-
 
 # Permio Provider
 
-The Permio provider manages authorisation data in [Permio](https://perms.io): permissions, roles,
+[Permio](https://perms.io) is hosted authorization for your app: RBAC and fine-grained permission checks on
+hierarchical resources, for multi-tenant SaaS. New to Permio? Start with the
+[quickstart](https://docs.perms.io/quickstart/) and the [Terraform guide](https://docs.perms.io/guides/terraform/).
+
+The Permio provider manages authorisation data in Permio: permissions, roles,
 groups and their members, and grants of roles and permissions to principals on resource URIs. The
 `permio_check` data source evaluates permission checks, which is useful for policy tests.
 

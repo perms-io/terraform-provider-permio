@@ -1,6 +1,10 @@
 # Terraform Provider for Permio
 
-Manage [Permio](https://perms.io) authorisation as code: permissions, roles, groups and their
+**[Permio](https://perms.io) is hosted authorization for your app: RBAC and fine-grained permission checks on hierarchical resources, for multi-tenant SaaS.**
+
+[Website](https://perms.io) · [Terraform guide](https://docs.perms.io/guides/terraform/) · [Quickstart](https://docs.perms.io/quickstart/) · [Registry](https://registry.terraform.io/providers/perms-io/permio/latest) · [Dashboard](https://app.perms.io)
+
+This provider manages Permio authorisation as code: permissions, roles, groups and their
 members, and grants of roles and permissions to principals on resource URIs. The `permio_check`
 data source evaluates permission checks, so you can write policy tests in Terraform.
 
@@ -59,6 +63,8 @@ data source evaluates permission checks, so you can write policy tests in Terraf
    ```
 
 3. Run `terraform init` and `terraform apply`.
+
+**Next:** the [Terraform guide](https://docs.perms.io/guides/terraform/) covers authentication, importing existing objects and policy tests, and the [registry docs](https://registry.terraform.io/providers/perms-io/permio/latest/docs) document every resource.
 
 ## Provider configuration
 
